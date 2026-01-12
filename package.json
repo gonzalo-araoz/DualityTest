@@ -20,13 +20,13 @@
     ],
     "author": "Gonzalo Araoz",
     "license": "ISC",
-    "homepage": "https://github.com/gonzaloaraoz/DualityTest#readme",
+    "homepage": "https://github.com/gonzalo-araoz/DualityTest#readme",
     "repository": {
         "type": "git",
-        "url": "git+https://github.com/gonzaloaraoz/DualityTest.git"
+        "url": "git+https://github.com/gonzalo-araoz/DualityTest.git"
     },
     "bugs": {
-        "url": "https://github.com/gonzaloaraoz/DualityTest/issues"
+        "url": "https://github.com/gonzalo-araoz/DualityTest/issues"
     },
     "dependencies": {
         "playwright": "^1.40.0",
