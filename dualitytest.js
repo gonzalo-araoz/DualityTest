@@ -1,7 +1,8 @@
 // dualitytest.js - Unified Web + Mobile automation API
 // Playwright for Web + Appium for Native Mobile
 
-import { chromium, webkit, firefox, expect } from 'playwright';
+import { chromium, webkit, firefox } from 'playwright';
+import { expect } from '@playwright/test';
 import { remote } from 'webdriverio';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
