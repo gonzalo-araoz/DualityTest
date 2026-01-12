@@ -1,0 +1,34 @@
+# Dependencies
+node_modules/
+package-lock.json
+
+# Environment
+.env
+
+# Playwright / Testing
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+playwright/.auth/
+
+# Media
+videos/
+screenshots/
+*.mp4
+*.mov
+*.avi
+screenshot-*.png
+recording-*.mp4
+
+# System
+.DS_Store
+Thumbs.db
+
+# Build outputs
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/

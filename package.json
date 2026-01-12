@@ -1,0 +1,35 @@
+{
+    "name": "dualitytest-driver",
+    "version": "1.0.0",
+    "description": "DualityTest: Unified Web + Mobile test automation combining Playwright and Appium under a single API",
+    "main": "dualitytest.js",
+    "type": "module",
+    "scripts": {
+        "test": "playwright test"
+    },
+    "keywords": [
+        "dualitytest",
+        "playwright",
+        "appium",
+        "automation",
+        "testing",
+        "mobile",
+        "web",
+        "cross-platform",
+        "e2e"
+    ],
+    "author": "Gonzalo Araoz",
+    "license": "ISC",
+    "homepage": "https://github.com/gonzaloaraoz/DualityTest#readme",
+    "repository": {
+        "type": "git",
+        "url": "git+https://github.com/gonzaloaraoz/DualityTest.git"
+    },
+    "bugs": {
+        "url": "https://github.com/gonzaloaraoz/DualityTest/issues"
+    },
+    "dependencies": {
+        "playwright": "^1.40.0",
+        "webdriverio": "^8.24.0"
+    }
+}
