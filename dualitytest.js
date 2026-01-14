@@ -7,6 +7,7 @@ import { remote } from 'webdriverio';
 import { existsSync } from 'fs';
 import { homedir } from 'os';
 import { join, extname } from 'path';
+import { execSync } from 'child_process';
 
 // Centralized logger
 class Logger {
@@ -37,12 +38,29 @@ class MobileLocator {
     this.selector = selector;
     this.type = type; // 'accessibility', 'xpath', 'text', 'id'
     this._element = null;
-    this.fallbackStrategies = fallbackStrategies; // Para intentar múltiples estrategias
-    this.index = index; // Índice del elemento (puede ser negativo, -1 = último)
+    this._elementCacheValid = false;
+    this.fallbackStrategies = fallbackStrategies; // To try multiple strategies
+    this.index = index; // Element index (can be negative, -1 = last)
+  }
+
+  _invalidateCache() {
+    this._element = null;
+    this._elementCacheValid = false;
   }
 
   async _getElement() {
-    if (this._element && this.index === null) return this._element;
+    // Always fetch fresh element if index is specified (indexed elements can change)
+    if (this._element && this.index === null && this._elementCacheValid) {
+      // Verify cached element is still valid
+      try {
+        if (await this._element.isDisplayed()) {
+          return this._element;
+        }
+      } catch (error) {
+        // Element is stale, invalidate cache
+        this._invalidateCache();
+      }
+    }
 
     const strategies = {
       accessibility: `~${this.selector}`,
@@ -51,7 +69,7 @@ class MobileLocator {
       id: this.selector
     };
 
-    // Si hay un índice (incluyendo negativo), obtener todos los elementos
+    // If there's an index (including negative), get all elements
     if (this.index !== null) {
       const selector = strategies[this.type] || this.selector;
       const elements = await this.driver.$$(selector);
@@ -60,7 +78,7 @@ class MobileLocator {
         throw new Error(`No elements found for selector: ${this.selector}`);
       }
 
-      // Calcular el índice real (si es negativo, contar desde el final)
+      // Calculate real index (if negative, count from the end)
       let realIndex = this.index;
       if (this.index < 0) {
         realIndex = elements.length + this.index;
@@ -71,26 +89,29 @@ class MobileLocator {
       }
 
       this._element = elements[realIndex];
+      this._elementCacheValid = true;
       return this._element;
     }
 
-    // Si hay estrategias de fallback, intentarlas en orden
+    // If there are fallback strategies, try them in order
     if (this.fallbackStrategies && this.fallbackStrategies.length > 0) {
       for (const strategy of this.fallbackStrategies) {
         try {
           this._element = await this.driver.$(strategy);
           if (this._element && await this._element.isDisplayed()) {
+            this._elementCacheValid = true;
             return this._element;
           }
         } catch (error) {
-          // Continuar con la siguiente estrategia
+          // Continue with next strategy
           continue;
         }
       }
     }
 
-    // Intentar la estrategia principal
+    // Try main strategy
     this._element = await this.driver.$(strategies[this.type]);
+    this._elementCacheValid = true;
     return this._element;
   }
 
@@ -160,7 +181,9 @@ class MobileLocator {
       const elements = await this.driver.$$(selector);
       return elements.length;
     } catch (error) {
-      return 0; // Return 0 if elements not found or error
+      // Log error for debugging but return 0 for graceful handling
+      console.warn(`[MobileLocator] count() failed for selector "${this.selector}":`, error.message);
+      return 0;
     }
   }
 }
@@ -195,7 +218,7 @@ class DualityTest {
     this.env = config.env || {};
   }
 
-  // ==================== INICIALIZACIÓN ====================
+  // ==================== INITIALIZATION ====================
 
   async launch(options = {}) {
     this.logger.info(`Launching ${this.platform} platform`, { appId: this.appId });
@@ -253,13 +276,19 @@ class DualityTest {
       throw new Error('appId is required for mobile platform');
     }
 
-    // Para Android, verificar ANDROID_HOME antes de intentar conectar
+    // For Android, verify ANDROID_HOME before attempting to connect
     if (this.platform === 'android') {
       const androidHome = this._detectAndroidHome();
       if (!androidHome && !process.env.ANDROID_HOME && !process.env.ANDROID_SDK_ROOT) {
         const errorMessage = this._getAndroidHomeError();
         this.logger.error('Android SDK not configured', {});
         throw new Error(errorMessage);
+      }
+
+      // For Android 16 (API 36+), clean Appium servers before starting session
+      // This resolves the "UiAutomation not connected" issue
+      if (options.deviceSerial) {
+        await this._cleanAppiumServers(options.deviceSerial);
       }
     }
 
@@ -268,13 +297,13 @@ class DualityTest {
     this.logger.info('Starting Appium session', { capabilities });
 
     try {
-      // Configurar nivel de log de webdriverio según el nivel del logger
+      // Configure webdriverio log level based on logger level
       const wdioLogLevel = this.logger.level === 'debug' ? 'warn' : 'error';
 
-      // Agregar opciones para reducir logs de Appium
+      // Add options to reduce Appium logs
       const finalCapabilities = {
         ...capabilities,
-        'appium:printPageSourceOnFindFailure': false // Evitar logs adicionales
+        'appium:printPageSourceOnFindFailure': false // Avoid additional logs
       };
 
       this.driver = await remote({
@@ -290,15 +319,15 @@ class DualityTest {
 
       this.logger.info('Appium session started', { sessionId: this.driver.sessionId });
 
-      // Nota: Si clearState está habilitado, Appium ya limpió los datos automáticamente
-      // (noReset: false en capabilities). No necesitamos llamar clearState() aquí.
-      // clearState() es útil cuando se llama después del launch para limpiar en medio de un test.
+      // Note: If clearState is enabled, Appium already cleared data automatically
+      // (noReset: false in capabilities). We don't need to call clearState() here.
+      // clearState() is useful when called after launch to clear state mid-test.
 
       return this;
     } catch (error) {
       this.logger.error('Failed to start Appium session', { error: error.message });
 
-      // Mejorar mensaje de error para ANDROID_HOME
+      // Improve error message for ANDROID_HOME
       if (error.message.includes('ANDROID_HOME') || error.message.includes('ANDROID_SDK_ROOT')) {
         const helpfulMessage = this._getAndroidHomeError();
         throw new Error(helpfulMessage);
@@ -309,7 +338,7 @@ class DualityTest {
   }
 
   _buildCapabilities(options) {
-    // Determinar si appId es una ruta de archivo o un package/bundle ID
+    // Determine if appId is a file path or a package/bundle ID
     const isAppPath = this.appId.includes('/') || this.appId.includes('\\') ||
       extname(this.appId).toLowerCase() === '.apk' ||
       extname(this.appId).toLowerCase() === '.ipa';
@@ -323,19 +352,19 @@ class DualityTest {
       ...options.capabilities
     };
 
-    // Solo usar appium:app si es una ruta de archivo
+    // Only use appium:app if it's a file path
     if (isAppPath) {
       baseCapabilities['appium:app'] = this.appId;
     }
 
-    // Android específico
+    // Android specific
     if (this.platform === 'android') {
-      // Si es un package name (no es ruta de archivo), usar appPackage
+      // If it's a package name (not a file path), use appPackage
       if (!isAppPath) {
         baseCapabilities['appium:appPackage'] = options.appPackage || this.appId;
         baseCapabilities['appium:appActivity'] = options.appActivity || '.MainActivity';
       } else {
-        // Si es un APK, también podemos especificar package/activity si se proporcionan
+        // If it's an APK, we can also specify package/activity if provided
         if (options.appPackage) {
           baseCapabilities['appium:appPackage'] = options.appPackage;
         }
@@ -347,11 +376,24 @@ class DualityTest {
       if (options.deviceSerial) {
         baseCapabilities['appium:udid'] = options.deviceSerial;
       }
+
+      // Specific capabilities for Android API 36+ (Android 16+) to resolve UiAutomation issues
+      // These capabilities help avoid the "UiAutomation not connected" error
+      // IMPORTANT: On Android 16, DO NOT use skipServerInstallation - can cause issues with corrupted servers
+      // Let Appium reinstall the clean UiAutomator2 server on each session
+      baseCapabilities['appium:skipUnlock'] = true; // Avoid unlock issues
+      baseCapabilities['appium:autoGrantPermissions'] = true; // Automatically grant permissions
+      baseCapabilities['appium:uiautomator2ServerLaunchTimeout'] = 60000; // More time to start server
+      baseCapabilities['appium:ignoreHiddenApiPolicyError'] = true; // Ignore hidden API policy errors (Android 16)
+      baseCapabilities['appium:disableWindowAnimation'] = true; // Disable animations (required for Android 16)
+      baseCapabilities['appium:enforceXPath1'] = true; // Use XPath 1.0 (more compatible)
+      // Configure shorter timeout for waitForIdle to avoid blocking
+      baseCapabilities['appium:waitForIdleTimeout'] = 100; // Short timeout to stabilize
     }
 
-    // iOS específico
+    // iOS specific
     if (this.platform === 'ios') {
-      // Para iOS, bundleId siempre se necesita
+      // For iOS, bundleId is always needed
       if (!isAppPath) {
         baseCapabilities['appium:bundleId'] = this.appId;
       }
@@ -363,9 +405,10 @@ class DualityTest {
     return baseCapabilities;
   }
 
-  // ==================== SELECTORES UNIFICADOS ====================
+  // ==================== UNIFIED SELECTORS ====================
 
   getByTestId(testId) {
+    this._ensureInitialized();
     if (this._isMobile()) {
       return new MobileLocator(this.driver, testId, 'accessibility');
     }
@@ -373,8 +416,9 @@ class DualityTest {
   }
 
   getByText(text, options = {}) {
+    this._ensureInitialized();
     if (this._isMobile()) {
-      // Para Appium usamos UiSelector en Android o predicate string en iOS
+      // For Appium we use UiSelector on Android or predicate string on iOS
       const index = options.index !== undefined ? options.index : null;
       if (this.platform === 'android') {
         const exact = options.exact ?? false;
@@ -383,7 +427,7 @@ class DualityTest {
           : `android=new UiSelector().textContains("${text}")`;
         return new MobileLocator(this.driver, selector, 'xpath', null, index);
       } else {
-        // iOS: usar predicate string
+        // iOS: use predicate string
         const selector = `label == "${text}" OR name == "${text}"`;
         return new MobileLocator(this.driver, `-ios predicate string:${selector}`, 'xpath', null, index);
       }
@@ -392,8 +436,9 @@ class DualityTest {
   }
 
   getByRole(role, options = {}) {
+    this._ensureInitialized();
     if (this._isMobile()) {
-      // En mobile, "role" se traduce a accessibility
+      // On mobile, "role" translates to accessibility
       const name = options.name || '';
       return this.getByText(name, { index: options.index });
     }
@@ -401,12 +446,13 @@ class DualityTest {
   }
 
   getByLabel(label) {
+    this._ensureInitialized();
     if (this._isMobile()) {
-      // En mobile, intentar primero por accessibility id, luego por texto
-      // Crear un locator que intente múltiples estrategias
+      // On mobile, try accessibility id first, then by text
+      // Create a locator that tries multiple strategies
       if (this.platform === 'android') {
-        // Buscar por accessibility id primero, si falla intentar por texto
-        // Usar UiSelector que busque por content-desc o text
+        // Search by accessibility id first, if it fails try by text
+        // Use UiSelector that searches by content-desc or text
         const selector = `android=new UiSelector().description("${label}").className("android.widget.EditText")`;
         return new MobileLocator(this.driver, selector, 'xpath');
       }
@@ -416,17 +462,18 @@ class DualityTest {
   }
 
   getByPlaceholder(placeholder) {
+    this._ensureInitialized();
     if (this._isMobile()) {
-      // En Android, placeholder puede estar en diferentes lugares
+      // On Android, placeholder can be in different places
       if (this.platform === 'android') {
-        // Intentar múltiples estrategias:
-        // 1. Por description (content-desc) - más común en React Native
-        // 2. Por textContains - si el placeholder está visible como texto
-        // 3. Por accessibility id
+        // Try multiple strategies:
+        // 1. By description (content-desc) - most common in React Native
+        // 2. By textContains - if placeholder is visible as text
+        // 3. By accessibility id
         const strategies = [
           `android=new UiSelector().descriptionContains("${placeholder}").className("android.widget.EditText")`,
           `android=new UiSelector().textContains("${placeholder}").className("android.widget.EditText")`,
-          `~${placeholder}` // accessibility id como fallback
+          `~${placeholder}` // accessibility id as fallback
         ];
         return new MobileLocator(this.driver, strategies[0], 'xpath', strategies);
       }
@@ -443,8 +490,9 @@ class DualityTest {
   }
 
   locator(selector) {
+    this._ensureInitialized();
     if (this._isMobile()) {
-      // Detectar tipo de selector
+      // Detect selector type
       if (selector.startsWith('~')) {
         return new MobileLocator(this.driver, selector.substring(1), 'accessibility');
       } else if (selector.includes('UiSelector') || selector.startsWith('android=')) {
@@ -456,9 +504,10 @@ class DualityTest {
     return this.page.locator(selector);
   }
 
-  // ==================== ACCIONES ====================
+  // ==================== ACTIONS ====================
 
   async tapOn(selector, options = {}) {
+    this._ensureInitialized();
     this.logger.debug('Tap action', { selector: this._selectorToString(selector) });
 
     try {
@@ -481,6 +530,7 @@ class DualityTest {
   }
 
   async doubleTapOn(selector) {
+    this._ensureInitialized();
     if (this._isMobile()) {
       const element = await this._toMobileElement(selector);
       await element.doubleClick();
@@ -492,6 +542,7 @@ class DualityTest {
   }
 
   async longPress(selector, duration = 1000) {
+    this._ensureInitialized();
     if (this._isMobile()) {
       const element = await this._toMobileElement(selector);
       const location = await element.getLocation();
@@ -720,9 +771,10 @@ class DualityTest {
     return this;
   }
 
-  // ==================== INPUT DE TEXTO ====================
+  // ==================== TEXT INPUT ====================
 
   async fill(selector, text) {
+    this._ensureInitialized();
     this.logger.debug('Fill action', { selector: this._selectorToString(selector), text });
 
     try {
@@ -746,8 +798,9 @@ class DualityTest {
   }
 
   async type(selector, text, options = {}) {
+    this._ensureInitialized();
     if (this._isMobile()) {
-      // Appium no tiene pressSequentially, usar setValue con delay simulado
+      // Appium doesn't have pressSequentially, use setValue with simulated delay
       const element = await this._toMobileElement(selector);
       for (const char of text) {
         await element.addValue(char);
@@ -795,7 +848,7 @@ class DualityTest {
     return this;
   }
 
-  // ==================== NAVEGACIÓN ====================
+  // ==================== NAVIGATION ====================
 
   async openLink(url) {
     if (this._isMobile()) {
@@ -825,44 +878,56 @@ class DualityTest {
   }
 
   async reload() {
+    this._ensureInitialized();
     if (this._isMobile()) {
-      // Recargar app: terminar y relanzar
+      // Reload app: terminate and relaunch
       await this.driver.terminateApp(this.appId);
       await this.driver.activateApp(this.appId);
+      // Wait for app to be ready
+      await this.waitFor(2000);
     } else {
       await this.page.reload();
     }
     return this;
   }
 
-  // ==================== SCROLL Y GESTOS ====================
+  // ==================== SCROLL AND GESTURES ====================
 
   async scroll(options = {}) {
+    this._ensureInitialized();
     const direction = options.direction || 'down';
     const distance = options.distance || 300;
 
     if (this._isMobile()) {
-      const size = await this.driver.getWindowSize();
-      const centerX = Math.round(size.width / 2);
-      const startY = Math.round(size.height * 0.5);
-      const endY = Math.round(direction === 'down' ? size.height * 0.2 : size.height * 0.8);
-
-      // Use W3C Actions API instead of deprecated touchAction
-      await this.driver.performActions([
-        {
-          type: 'pointer',
-          id: 'finger1',
-          parameters: { pointerType: 'touch' },
-          actions: [
-            { type: 'pointerMove', duration: 0, x: centerX, y: startY },
-            { type: 'pointerDown', button: 0 },
-            { type: 'pause', duration: 100 },
-            { type: 'pointerMove', duration: 300, x: centerX, y: endY },
-            { type: 'pointerUp', button: 0 }
-          ]
+      if (this.platform === 'android') {
+        // Use Appium's native mobile:scrollGesture command for Android (more reliable)
+        try {
+          const size = await this.driver.getWindowSize();
+          const scrollArea = {
+            left: Math.round(size.width * 0.1),
+            top: Math.round(size.height * 0.2),
+            width: Math.round(size.width * 0.8),
+            height: Math.round(size.height * 0.6)
+          };
+          
+          await this.driver.execute('mobile: scrollGesture', {
+            left: scrollArea.left,
+            top: scrollArea.top,
+            width: scrollArea.width,
+            height: scrollArea.height,
+            direction: direction === 'down' ? 'down' : 'up',
+            percent: 0.5,
+            speed: 500
+          });
+        } catch (error) {
+          // Fallback to swipe if mobile:scrollGesture fails
+          this.logger.debug('mobile:scrollGesture failed, using swipe fallback', { error: error.message });
+          await this.swipe(direction === 'down' ? 'up' : 'down', { distance });
         }
-      ]);
-      await this.driver.releaseActions();
+      } else {
+        // iOS - use swipe
+        await this.swipe(direction === 'down' ? 'up' : 'down', { distance });
+      }
     } else {
       await this.swipe(direction === 'down' ? 'up' : 'down', { distance });
     }
@@ -886,6 +951,7 @@ class DualityTest {
   }
 
   async swipe(direction, options = {}) {
+    this._ensureInitialized();
     if (this._isMobile()) {
       const size = await this.driver.getWindowSize();
       const startX = Math.round(options.startX || size.width / 2);
@@ -902,22 +968,70 @@ class DualityTest {
       const coords = directions[direction];
       if (!coords) throw new Error(`Invalid swipe direction: ${direction}`);
 
-      // Use W3C Actions API instead of deprecated touchAction
-      await this.driver.performActions([
-        {
-          type: 'pointer',
-          id: 'finger1',
-          parameters: { pointerType: 'touch' },
-          actions: [
-            { type: 'pointerMove', duration: 0, x: Math.round(coords.x), y: Math.round(coords.y) },
-            { type: 'pointerDown', button: 0 },
-            { type: 'pause', duration: 100 },
-            { type: 'pointerMove', duration: 300, x: Math.round(coords.toX), y: Math.round(coords.toY) },
-            { type: 'pointerUp', button: 0 }
-          ]
+      // Use Appium's native mobile:swipeGesture command for Android (more reliable than W3C Actions)
+      if (this.platform === 'android') {
+        try {
+          // Calculate swipe area - use a small area around the start point
+          const swipeArea = 50; // Small area for swipe gesture
+          const startX = Math.round(coords.x);
+          const startY = Math.round(coords.y);
+          const endX = Math.round(coords.toX);
+          const endY = Math.round(coords.toY);
+          
+          // Determine direction based on coordinates
+          let swipeDirection;
+          if (Math.abs(endY - startY) > Math.abs(endX - startX)) {
+            swipeDirection = endY < startY ? 'up' : 'down';
+          } else {
+            swipeDirection = endX < startX ? 'left' : 'right';
+          }
+          
+          await this.driver.execute('mobile: swipeGesture', {
+            left: Math.max(0, Math.min(startX, endX) - swipeArea),
+            top: Math.max(0, Math.min(startY, endY) - swipeArea),
+            width: Math.abs(endX - startX) + (swipeArea * 2) || swipeArea * 2,
+            height: Math.abs(endY - startY) + (swipeArea * 2) || swipeArea * 2,
+            direction: swipeDirection,
+            percent: 1.0,
+            speed: 500
+          });
+        } catch (error) {
+          // Fallback to W3C Actions if mobile:swipeGesture fails
+          this.logger.debug('mobile:swipeGesture failed, using W3C Actions fallback', { error: error.message });
+          await this.driver.performActions([
+            {
+              type: 'pointer',
+              id: 'finger1',
+              parameters: { pointerType: 'touch' },
+              actions: [
+                { type: 'pointerMove', duration: 0, x: Math.round(coords.x), y: Math.round(coords.y) },
+                { type: 'pointerDown', button: 0 },
+                { type: 'pause', duration: 100 },
+                { type: 'pointerMove', duration: 300, x: Math.round(coords.toX), y: Math.round(coords.toY) },
+                { type: 'pointerUp', button: 0 }
+              ]
+            }
+          ]);
+          await this.driver.releaseActions();
         }
-      ]);
-      await this.driver.releaseActions();
+      } else {
+        // iOS - use W3C Actions
+        await this.driver.performActions([
+          {
+            type: 'pointer',
+            id: 'finger1',
+            parameters: { pointerType: 'touch' },
+            actions: [
+              { type: 'pointerMove', duration: 0, x: Math.round(coords.x), y: Math.round(coords.y) },
+              { type: 'pointerDown', button: 0 },
+              { type: 'pause', duration: 100 },
+              { type: 'pointerMove', duration: 300, x: Math.round(coords.toX), y: Math.round(coords.toY) },
+              { type: 'pointerUp', button: 0 }
+            ]
+          }
+        ]);
+        await this.driver.releaseActions();
+      }
     } else {
       const viewport = this.page.viewportSize();
       const startX = options.startX || viewport.width / 2;
@@ -940,9 +1054,10 @@ class DualityTest {
     return this;
   }
 
-  // ==================== ESPERAS ====================
+  // ==================== WAITS ====================
 
   async waitFor(milliseconds) {
+    this._ensureInitialized();
     if (this._isMobile()) {
       await this.driver.pause(milliseconds);
     } else {
@@ -996,9 +1111,10 @@ class DualityTest {
     throw new Error('Extended wait condition not met');
   }
 
-  // ==================== MÉTODOS HELPER ====================
+  // ==================== HELPER METHODS ====================
 
   async isVisible(selector) {
+    this._ensureInitialized();
     try {
       if (this._isMobile()) {
         const locator = this._toLocator(selector);
@@ -1223,8 +1339,9 @@ class DualityTest {
   }
 
   async press(key) {
+    this._ensureInitialized();
     if (this._isMobile()) {
-      // Mapeo básico de teclas comunes
+      // Basic mapping of common keys
       const keyMap = {
         'Enter': 66, // KEYCODE_ENTER
         'Escape': 111, // KEYCODE_ESCAPE
@@ -1271,9 +1388,10 @@ class DualityTest {
     return this;
   }
 
-  // ==================== UTILIDADES ====================
+  // ==================== UTILITIES ====================
 
   async getText(selector) {
+    this._ensureInitialized();
     if (this._isMobile()) {
       const locator = this._toLocator(selector);
       return await locator.getText();
@@ -1284,6 +1402,7 @@ class DualityTest {
   }
 
   async getValue(selector) {
+    this._ensureInitialized();
     if (this._isMobile()) {
       const element = await this._toMobileElement(selector);
       return await element.getValue();
@@ -1294,6 +1413,7 @@ class DualityTest {
   }
 
   async screenshot(options = {}) {
+    this._ensureInitialized();
     const path = options.path ?? `screenshot-${Date.now()}.png`;
 
     if (this._isMobile()) {
@@ -1357,7 +1477,7 @@ class DualityTest {
     return this;
   }
 
-  // ==================== VARIABLES Y ENTORNO ====================
+  // ==================== VARIABLES AND ENVIRONMENT ====================
 
   async evalScript(script) {
     if (this._isMobile()) {
@@ -1422,15 +1542,15 @@ class DualityTest {
           throw new Error('Driver not initialized. Cannot clear state before launch.');
         }
 
-        // Terminar app si está corriendo
+        // Terminate app if running
         try {
           await this.driver.terminateApp(this.appId);
         } catch (error) {
-          // App podría no estar corriendo, continuar
+          // App might not be running, continue
           this.logger.debug('App termination skipped', { error: error.message });
         }
 
-        // Limpiar datos (Android)
+        // Clear data (Android)
         if (this.platform === 'android') {
           try {
             await this.driver.execute('mobile: shell', {
@@ -1442,8 +1562,10 @@ class DualityTest {
           }
         }
 
-        // Relanzar app
+        // Relaunch app
         await this.driver.activateApp(this.appId);
+        // Wait for app to be ready
+        await this.waitFor(2000);
 
       } else {
         if (!this.context) {
@@ -1470,7 +1592,7 @@ class DualityTest {
 
   async clearKeychain() {
     if (this.platform === 'ios' && this._isMobile()) {
-      // iOS keychain reset requiere capabilities específicos
+      // iOS keychain reset requires specific capabilities
       this.logger.warn('clearKeychain requires app restart with resetOnSessionStartOnly=false capability');
     } else {
       this.logger.warn('clearKeychain only available on iOS');
@@ -1478,14 +1600,14 @@ class DualityTest {
     return this;
   }
 
-  // ==================== HELPERS INTERNOS ====================
+  // ==================== INTERNAL HELPERS ====================
 
   _isMobile() {
     return this.platform === 'android' || this.platform === 'ios';
   }
 
   _detectAndroidHome() {
-    // Primero verificar variables de entorno
+    // First check environment variables
     if (process.env.ANDROID_HOME && existsSync(process.env.ANDROID_HOME)) {
       return process.env.ANDROID_HOME;
     }
@@ -1493,7 +1615,7 @@ class DualityTest {
       return process.env.ANDROID_SDK_ROOT;
     }
 
-    // Intentar ubicaciones comunes
+    // Try common locations
     const home = homedir();
     const commonPaths = [
       join(home, 'Library', 'Android', 'sdk'),      // macOS
@@ -1510,6 +1632,47 @@ class DualityTest {
     }
 
     return null;
+  }
+
+  async _cleanAppiumServers(deviceSerial) {
+    // Clean Appium servers to resolve issues with Android 16 (API 36+)
+    // This resolves the "UiAutomation not connected" error
+    const androidHome = this._detectAndroidHome() || process.env.ANDROID_HOME || process.env.ANDROID_SDK_ROOT;
+    if (!androidHome) {
+      this.logger.warn('Cannot clean Appium servers: ANDROID_HOME not found');
+      return;
+    }
+
+    const adbPath = join(androidHome, 'platform-tools', 'adb');
+    if (!existsSync(adbPath)) {
+      this.logger.warn('Cannot clean Appium servers: ADB not found');
+      return;
+    }
+
+    const appiumPackages = [
+      'io.appium.uiautomator2.server',
+      'io.appium.uiautomator2.server.test'
+    ];
+
+    try {
+      for (const packageName of appiumPackages) {
+        try {
+          // Try to uninstall package (may fail if not installed, that's okay)
+          execSync(`${adbPath} -s ${deviceSerial} uninstall ${packageName}`, {
+            stdio: 'ignore',
+            timeout: 5000
+          });
+          this.logger.debug(`Cleaned Appium package: ${packageName}`);
+        } catch (error) {
+          // Ignore errors if package is not installed
+          this.logger.debug(`Package ${packageName} not found or already removed`);
+        }
+      }
+      this.logger.info('Appium servers cleaned successfully');
+    } catch (error) {
+      this.logger.warn('Failed to clean Appium servers', { error: error.message });
+      // Don't throw error, just log - Appium will reinstall servers if needed
+    }
   }
 
   _getAndroidHomeError() {
@@ -1554,7 +1717,20 @@ class DualityTest {
     return message;
   }
 
+  _ensureInitialized() {
+    if (this._isMobile()) {
+      if (!this.driver) {
+        throw new Error('Driver not initialized. Call launch() first.');
+      }
+    } else {
+      if (!this.page) {
+        throw new Error('Page not initialized. Call launch() first.');
+      }
+    }
+  }
+
   _toLocator(selector) {
+    this._ensureInitialized();
     if (typeof selector === 'string') {
       return this._isMobile() ? this.locator(selector) : this.page.locator(selector);
     }
@@ -1583,14 +1759,14 @@ class DualityTest {
 
 export default DualityTest;
 
-/* ==================== EJEMPLOS DE USO ==================== */
+/* ==================== USAGE EXAMPLES ==================== */
 
 /*
 // ===== ANDROID =====
-import MpwApi from './mpw-api.js';
+import DualityTest from './dualitytest.js';
 
 async function testAndroidApp() {
-  const app = new MpwApi({ 
+  const app = new DualityTest({ 
     appId: 'com.example.app',
     platform: 'android',
     enableLogging: true,
@@ -1605,14 +1781,14 @@ async function testAndroidApp() {
     appActivity: '.MainActivity'
   });
 
-  // API idéntica a Playwright!
+  // API identical to Playwright!
   await app
     .fill(app.getByLabel('Username'), 'testuser')
     .fill(app.getByLabel('Password'), 'password123')
     .tapOn(app.getByRole('button', { name: 'Login' }))
     .waitForVisible(app.getByText('Welcome'));
 
-  // If/else nativos
+  // Native if/else
   if (await app.isVisible(app.getByText('Accept Terms'))) {
     await app.tapOn(app.getByText('Accept'));
   }
@@ -1625,7 +1801,7 @@ async function testAndroidApp() {
 
 // ===== iOS =====
 async function testIOSApp() {
-  const app = new MpwApi({ 
+  const app = new DualityTest({ 
     appId: 'com.example.iosapp',
     platform: 'ios'
   });
@@ -1645,14 +1821,14 @@ async function testIOSApp() {
 
 // ===== WEB =====
 async function testWeb() {
-  const app = new MpwApi({ 
+  const app = new DualityTest({ 
     appId: 'https://example.com',
     platform: 'web'
   });
 
   await app.launch({ headless: false, clearState: true });
 
-  // For loop nativo
+  // Native for loop
   for (let i = 0; i < 3; i++) {
     await app
       .tapOn(`.item-${i}`)
@@ -1663,21 +1839,21 @@ async function testWeb() {
   await app.close();
 }
 
-// ===== TEST COMPLEJO CON IF/WHILE =====
+// ===== COMPLEX TEST WITH IF/WHILE =====
 async function testComplexFlow() {
-  const app = new MpwApi({ 
+  const app = new DualityTest({ 
     appId: 'com.shop.android',
     platform: 'android'
   });
 
   await app.launch({ clearState: true });
 
-  // Manejo de permisos
+  // Handle permissions
   if (await app.isVisible(app.getByText('Allow'))) {
     await app.tapOn(app.getByText('Allow'));
   }
 
-  // Scroll hasta encontrar producto
+  // Scroll until product is found
   let found = false;
   let attempts = 0;
   while (!found && attempts < 10) {
