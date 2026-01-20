@@ -61,6 +61,13 @@ Launches the browser or app depending on the platform.
 - `options.port` (number): Appium port (default: `4723`)
 - `options.capabilities` (object): Additional Appium capabilities
 
+**Note:** DualityTest automatically applies performance optimizations for Android:
+- Implicit wait timeout: 2 seconds
+- Skip server installation when not doing full reset
+- Compact responses enabled
+- Performance logging disabled
+- Animations enabled for realistic testing
+
 **Parameters (iOS):**
 - `options.clearState` (boolean): Clear app data
 - `options.deviceName` (string): Device/simulator name
@@ -198,7 +205,7 @@ Taps or clicks on an element.
 
 **Parameters:**
 - `selector`: Locator or selector string
-- `options.timeout` (number): Timeout in ms (default: `30000`)
+- `options.timeout` (number): Timeout in ms (default: `10000`)
 - `options.force` (boolean): Force click even if not visible (web only)
 - `options.position` (object): `{ x: number, y: number }` (web only)
 
@@ -240,14 +247,14 @@ Retries tapping on an element until successful.
 **Parameters:**
 - `selector`: Locator or selector string
 - `options.retries` (number): Number of retries (default: `5`)
-- `options.delay` (number): Delay between retries in ms (default: `500`)
-- `options.timeout` (number): Timeout per attempt in ms (default: `5000`)
+- `options.delay` (number): Delay between retries in ms (default: `100`)
+- `options.timeout` (number): Timeout per attempt in ms (default: `3000`)
 
 **Example:**
 ```javascript
 await app.tapOnWithRetry(app.getByText('Submit'), {
   retries: 10,
-  delay: 300,
+  delay: 100,
   timeout: 10000
 });
 ```
@@ -261,8 +268,8 @@ Taps on an element repeatedly until it disappears.
 **Parameters:**
 - `selector`: Locator or selector string
 - `options.maxAttempts` (number): Max attempts (default: `10`)
-- `options.checkInterval` (number): Check interval in ms (default: `500`)
-- `options.tapDelay` (number): Delay after each tap in ms (default: `300`)
+- `options.checkInterval` (number): Check interval in ms (default: `100`)
+- `options.tapDelay` (number): Delay after each tap in ms (default: `50`)
 
 **Example:**
 ```javascript
@@ -282,8 +289,8 @@ Taps on an element until another target element appears.
 - `selector`: Locator of element to click
 - `targetSelector`: Locator of element that should appear
 - `options.maxAttempts` (number): Max attempts (default: `10`)
-- `options.checkInterval` (number): Check interval in ms (default: `500`)
-- `options.tapDelay` (number): Delay after each tap in ms (default: `300`)
+- `options.checkInterval` (number): Check interval in ms (default: `100`)
+- `options.tapDelay` (number): Delay after each tap in ms (default: `50`)
 
 **Example:**
 ```javascript
@@ -518,7 +525,7 @@ Waits for an element to be visible.
 
 **Parameters:**
 - `selector`: Locator or selector string
-- `options.timeout` (number): Timeout in ms (default: `30000`)
+- `options.timeout` (number): Timeout in ms (default: `10000`)
 
 **Example:**
 ```javascript
@@ -531,7 +538,7 @@ Waits for an element to disappear.
 
 **Parameters:**
 - `selector`: Locator or selector string
-- `options.timeout` (number): Timeout in ms (default: `30000`)
+- `options.timeout` (number): Timeout in ms (default: `10000`)
 
 **Example:**
 ```javascript
@@ -545,14 +552,14 @@ Custom wait with multiple conditions.
 **Parameters:**
 - `options.visible` (selector): Element that must be visible
 - `options.notVisible` (selector): Element that must not be visible
-- `options.timeout` (number): Timeout in ms (default: `30000`)
+- `options.timeout` (number): Timeout in ms (default: `10000`)
 
 **Example:**
 ```javascript
 await app.extendedWaitUntil({
   visible: '.success-message',
   notVisible: '.error-message',
-  timeout: 30000
+  timeout: 10000
 });
 ```
 

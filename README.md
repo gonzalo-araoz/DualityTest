@@ -285,6 +285,15 @@ Requires Android device connected via ADB or running emulator.
 - Appium with `uiautomator2` driver installed
 - Device/emulator visible in `adb devices`
 
+**Performance Optimizations**:
+DualityTest includes several performance optimizations for Android:
+- **Faster timeouts**: Default timeouts reduced from 30s to 10s for quicker test execution
+- **Optimized delays**: Reduced delays between retries (100ms) and taps (50ms)
+- **Implicit wait**: Configured to 2 seconds for faster element finding
+- **Server installation**: Skips reinstalling UiAutomator2 server when not doing full reset
+- **Compact responses**: Uses compact JSON responses for faster communication
+- **Animations enabled**: Keeps animations enabled for realistic performance testing
+
 ```javascript
 const app = new DualityTest({ 
   appId: 'com.example.app',
@@ -371,13 +380,13 @@ await app.longPress(selector, 2000)
 // Retry Methods - For problematic buttons
 await app.tapOnWithRetry(selector, {
   retries: 10,
-  delay: 300,
+  delay: 100,
   timeout: 10000
 })
 
 await app.tapOnUntilGone(selector, {
   maxAttempts: 15,
-  tapDelay: 500
+  tapDelay: 50
 })
 
 await app.tapOnUntilVisible(
@@ -420,7 +429,7 @@ await app.swipe('left', { distance: 300 })
 await app.waitFor(2000)
 
 // Wait for visibility
-await app.waitForVisible(selector, { timeout: 30000 })
+await app.waitForVisible(selector, { timeout: 10000 })
 
 // Wait until gone
 await app.waitUntilGone(selector)
@@ -429,7 +438,7 @@ await app.waitUntilGone(selector)
 await app.extendedWaitUntil({
   visible: '.success',
   notVisible: '.error',
-  timeout: 30000
+  timeout: 10000
 })
 ```
 
@@ -581,7 +590,7 @@ test('Handle button with overlay', async () => {
   // Option 1: Use tapOnWithRetry for unresponsive buttons
   await app.tapOnWithRetry(app.getByText('Continue'), {
     retries: 10,
-    delay: 300
+    delay: 100
   });
 
   // Option 2: Use tapOnElementByCoordinates for buttons with overlay

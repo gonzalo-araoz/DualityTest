@@ -117,13 +117,13 @@ class MobileLocator {
 
   async tap(options = {}) {
     const element = await this._getElement();
-    await element.waitForDisplayed({ timeout: options.timeout || 30000 });
+    await element.waitForDisplayed({ timeout: options.timeout || 10000 });
     await element.click();
   }
 
   async fill(text) {
     const element = await this._getElement();
-    await element.waitForDisplayed({ timeout: 30000 });
+    await element.waitForDisplayed({ timeout: 10000 });
     await element.setValue(text);
   }
 
@@ -160,10 +160,10 @@ class MobileLocator {
     const state = options.state || 'visible';
 
     if (state === 'visible') {
-      await element.waitForDisplayed({ timeout: options.timeout || 30000 });
+      await element.waitForDisplayed({ timeout: options.timeout || 10000 });
     } else if (state === 'hidden') {
       await element.waitForDisplayed({
-        timeout: options.timeout || 30000,
+        timeout: options.timeout || 10000,
         reverse: true
       });
     }
@@ -319,6 +319,15 @@ class DualityTest {
 
       this.logger.info('Appium session started', { sessionId: this.driver.sessionId });
 
+      // Set implicit wait timeout explicitly after session creation for better control
+      // This reduces the default wait time when finding elements
+      try {
+        await this.driver.setTimeout({ implicit: 2000 }); // 2 seconds implicit wait
+        this.logger.debug('Implicit wait timeout set to 2000ms');
+      } catch (error) {
+        this.logger.warn(`Could not set implicit wait timeout: ${error.message}`);
+      }
+
       // Note: If clearState is enabled, Appium already cleared data automatically
       // (noReset: false in capabilities). We don't need to call clearState() here.
       // clearState() is useful when called after launch to clear state mid-test.
@@ -385,10 +394,34 @@ class DualityTest {
       baseCapabilities['appium:autoGrantPermissions'] = true; // Automatically grant permissions
       baseCapabilities['appium:uiautomator2ServerLaunchTimeout'] = 60000; // More time to start server
       baseCapabilities['appium:ignoreHiddenApiPolicyError'] = true; // Ignore hidden API policy errors (Android 16)
-      baseCapabilities['appium:disableWindowAnimation'] = true; // Disable animations (required for Android 16)
+      // Animations kept enabled for more realistic performance testing
       baseCapabilities['appium:enforceXPath1'] = true; // Use XPath 1.0 (more compatible)
       // Configure shorter timeout for waitForIdle to avoid blocking
-      baseCapabilities['appium:waitForIdleTimeout'] = 100; // Short timeout to stabilize
+      // Small value (100ms) balances speed and stability - 0 can cause issues
+      baseCapabilities['appium:waitForIdleTimeout'] = 100; // Small timeout for faster actions
+      
+      // Performance optimizations for real devices
+      // Skip server installation if packages are already installed (faster startup)
+      // Only skip if not doing a full reset, to avoid corrupted server issues
+      if (!options.clearState) {
+        baseCapabilities['appium:skipServerInstallation'] = true; // Skip reinstall if packages exist
+      }
+      
+      // Reduce unnecessary checks and optimize for speed
+      baseCapabilities['appium:skipDeviceInitialization'] = false; // Keep this false for reliability
+      baseCapabilities['appium:adbExecTimeout'] = 15000; // Reduce ADB timeout for faster failures
+      
+      // Critical: Set implicit wait timeout to reduce waiting time
+      // This is the default wait time Appium uses when finding elements
+      baseCapabilities['appium:implicitWaitTimeout'] = 2000; // 2 seconds instead of default 0 (which uses server default ~20s)
+      
+      // Disable unnecessary image comparison and other slow features
+      baseCapabilities['appium:shouldUseCompactResponses'] = true; // Use compact responses
+      baseCapabilities['appium:enablePerformanceLogging'] = false; // Disable performance logging overhead
+      
+      // Optimize element finding
+      baseCapabilities['appium:autoWebviewTimeout'] = 2000; // Faster webview detection
+      baseCapabilities['appium:chromedriverExecutable'] = undefined; // Let Appium manage
     }
 
     // iOS specific
@@ -517,7 +550,7 @@ class DualityTest {
       } else {
         const element = this._toLocator(selector);
         await element.tap({
-          timeout: options.timeout ?? 30000,
+          timeout: options.timeout ?? 10000,
           force: options.force ?? false,
           position: options.position
         });
@@ -582,7 +615,7 @@ class DualityTest {
 
   async tapOnWithRetry(selector, options = {}) {
     const maxRetries = options.retries ?? 5;
-    const delayBetweenRetries = options.delay ?? 500;
+    const delayBetweenRetries = options.delay ?? 100; // Reduced from 500ms to 100ms
 
     this.logger.debug('Tap with retry', {
       selector: this._selectorToString(selector),
@@ -591,7 +624,7 @@ class DualityTest {
 
     for (let i = 0; i < maxRetries; i++) {
       try {
-        await this.tapOn(selector, { timeout: options.timeout ?? 5000 });
+        await this.tapOn(selector, { timeout: options.timeout ?? 3000 });
         this.logger.debug(`Tap successful on attempt ${i + 1}`);
 
         // Esperar un poco para que el tap tenga efecto
@@ -621,8 +654,8 @@ class DualityTest {
 
   async tapOnUntilGone(selector, options = {}) {
     const maxAttempts = options.maxAttempts ?? 10;
-    const checkInterval = options.checkInterval ?? 500;
-    const tapDelay = options.tapDelay ?? 300;
+    const checkInterval = options.checkInterval ?? 100; // Reduced from 500ms to 100ms
+    const tapDelay = options.tapDelay ?? 50; // Reduced from 300ms to 50ms
 
     this.logger.debug('Tap until gone', {
       selector: this._selectorToString(selector),
@@ -670,8 +703,8 @@ class DualityTest {
 
   async tapOnUntilVisible(selector, targetSelector, options = {}) {
     const maxAttempts = options.maxAttempts ?? 10;
-    const checkInterval = options.checkInterval ?? 500;
-    const tapDelay = options.tapDelay ?? 300;
+    const checkInterval = options.checkInterval ?? 100; // Reduced from 500ms to 100ms
+    const tapDelay = options.tapDelay ?? 50; // Reduced from 300ms to 50ms
 
     this.logger.debug('Tap until visible', {
       selector: this._selectorToString(selector),
@@ -1071,10 +1104,10 @@ class DualityTest {
 
     if (this._isMobile()) {
       const locator = this._toLocator(selector);
-      await locator.waitFor({ state: 'visible', timeout: options.timeout || 30000 });
+      await locator.waitFor({ state: 'visible', timeout: options.timeout || 10000 });
     } else {
       const element = this._toLocator(selector);
-      await element.waitFor({ state: 'visible', timeout: options.timeout || 30000 });
+      await element.waitFor({ state: 'visible', timeout: options.timeout || 10000 });
     }
     return this;
   }
@@ -1082,16 +1115,16 @@ class DualityTest {
   async waitUntilGone(selector, options = {}) {
     if (this._isMobile()) {
       const locator = this._toLocator(selector);
-      await locator.waitFor({ state: 'hidden', timeout: options.timeout || 30000 });
+      await locator.waitFor({ state: 'hidden', timeout: options.timeout || 10000 });
     } else {
       const element = this._toLocator(selector);
-      await element.waitFor({ state: 'hidden', timeout: options.timeout || 30000 });
+      await element.waitFor({ state: 'hidden', timeout: options.timeout || 10000 });
     }
     return this;
   }
 
   async extendedWaitUntil(options = {}) {
-    const { visible, notVisible, timeout = 30000 } = options;
+    const { visible, notVisible, timeout = 10000 } = options;
     const startTime = Date.now();
 
     while (Date.now() - startTime < timeout) {
